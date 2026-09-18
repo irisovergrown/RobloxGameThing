@@ -29,30 +29,40 @@ body{
 a{color:var(--dim)}
 hr{border:0;border-top:1px solid var(--line);margin:18px 0}
 .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
-.lbl{color:var(--dim);font-size:12px;letter-spacing:.06em;text-transform:lowercase}
+.lbl{color:var(--dim);font-size:12px;letter-spacing:.06em}
 .meta{color:var(--dim);font-size:12px;white-space:nowrap}
 
 header{margin-bottom:22px}
-header .t{letter-spacing:.02em}
 header .s{color:var(--dim);font-size:12px;margin-top:2px}
 
 .slot{margin:14px 0 4px}
+
+/* reel: a one-row window the strip is dragged through */
+.reel{position:relative;overflow:hidden;margin-top:2px;cursor:pointer}
+.reel.spin{
+  -webkit-mask-image:linear-gradient(transparent 0%, #000 26%, #000 74%, transparent 100%);
+          mask-image:linear-gradient(transparent 0%, #000 26%, #000 74%, transparent 100%);
+}
+.strip{will-change:transform}
 .word{
   font-size:clamp(26px,7.5vw,42px);
   line-height:1.12;
-  margin:2px 0 0;
   letter-spacing:-.01em;
-  cursor:pointer;
-  word-break:break-word;
+  white-space:nowrap;
 }
 .word.core{color:var(--hot)}
 .word.theme{color:var(--cool)}
 .word.none{color:var(--line)}
-.word.scramble{color:var(--dim)}
-.word:active{opacity:.6}
+.reel:active{opacity:.6}
+.reel.land .word{animation:snap .2s ease-out}
+@keyframes snap{
+  0%  {transform:translateY(-3px); filter:brightness(1.75)}
+  55% {transform:translateY(1px)}
+  100%{transform:none; filter:none}
+}
 
-#core2{display:none}
-#core2.on{display:block}
+#core2Slot{display:none}
+#core2Slot.on{display:block}
 
 .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:22px}
 button{
@@ -66,6 +76,7 @@ button{
 button:hover{border-color:var(--dim)}
 button:focus-visible{outline:1px solid var(--hot);outline-offset:1px}
 button[aria-pressed="true"]{color:var(--bg);background:var(--fg);border-color:var(--fg)}
+button[disabled]{color:var(--dim);cursor:default}
 #roll{border-color:var(--dim);min-width:104px}
 .stepper{display:flex;border:1px solid var(--line)}
 .stepper button{border:0;padding:7px 10px}
@@ -77,12 +88,13 @@ button[aria-pressed="true"]{color:var(--bg);background:var(--fg);border-color:va
 #log li b{font-weight:normal;color:var(--fg)}
 footer{margin-top:34px;color:var(--dim);font-size:12px}
 @media (max-width:420px){ .meta{font-size:11px} }
+@media (prefers-reduced-motion:reduce){ .reel.land .word{animation:none} }
 </style>
 </head>
 <body>
 
 <header>
-  <div class="t">week roller</div>
+  <div>week roller</div>
   <div class="s">one game a week. no arguing with the dice.</div>
 </header>
 
@@ -90,15 +102,19 @@ footer{margin-top:34px;color:var(--dim);font-size:12px}
 
 <section class="slot">
   <div class="row"><span class="lbl">core</span><span class="meta" id="coreMeta"></span></div>
-  <div class="word core" id="core" title="click to copy">&mdash;</div>
-  <div class="word core" id="core2" title="click to copy">&mdash;</div>
+  <div class="reel" id="coreReel" title="click to copy"><div class="strip"><div class="word core">&mdash;</div></div></div>
+</section>
+
+<section class="slot" id="core2Slot">
+  <div class="row"><span class="lbl">core 2</span><span class="meta" id="core2Meta"></span></div>
+  <div class="reel" id="core2Reel" title="click to copy"><div class="strip"><div class="word core">&mdash;</div></div></div>
 </section>
 
 <hr>
 
 <section class="slot">
   <div class="row"><span class="lbl">flavor</span><span class="meta" id="themeMeta"></span></div>
-  <div class="word none" id="theme" title="click to copy">&mdash;</div>
+  <div class="reel" id="themeReel" title="click to copy"><div class="strip"><div class="word none">&mdash;</div></div></div>
 </section>
 
 <hr>
@@ -127,8 +143,9 @@ const THEME = ["Backrooms","Analog Horror","Mascot Horror","Cute Horror","Cozy",
 
 const $ = id => document.getElementById(id);
 const el = {
-  core:$("core"), core2:$("core2"), theme:$("theme"),
-  coreMeta:$("coreMeta"), themeMeta:$("themeMeta"),
+  coreReel:$("coreReel"), core2Reel:$("core2Reel"), themeReel:$("themeReel"),
+  core2Slot:$("core2Slot"),
+  coreMeta:$("coreMeta"), core2Meta:$("core2Meta"), themeMeta:$("themeMeta"),
   pct:$("pct"), roll:$("roll"), two:$("two"), norepeat:$("norepeat"),
   logList:$("logList")
 };
@@ -142,11 +159,14 @@ let chance   = store.get("chance", 40);
 let twoCore  = store.get("two", false);
 let noRepeat = store.get("norepeat", true);
 let log      = store.get("log", []);
+const landed = { coreReel:"", core2Reel:"", themeReel:"" };
+
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // bags: shuffled queues so you don't get Obby four weeks running
 const bags = { core:[], theme:[] };
 function draw(list, name, exclude){
-  if(!noRepeat) {
+  if(!noRepeat){
     let w; do { w = list[(Math.random()*list.length)|0]; } while(exclude && list.length > 1 && w === exclude);
     return w;
   }
@@ -162,9 +182,55 @@ function draw(list, name, exclude){
 }
 function bagLeft(name, list){ return noRepeat ? (bags[name].length || list.length) : list.length; }
 
-function setWord(node, text, cls){
-  node.textContent = text;
-  node.className = "word " + cls;
+function mkWord(text, cls){
+  const d = document.createElement("div");
+  d.className = "word " + cls;
+  d.textContent = text;
+  return d;
+}
+function setStatic(reel, text, cls){
+  const strip = document.createElement("div");
+  strip.className = "strip";
+  strip.append(mkWord(text, cls));
+  reel.textContent = "";
+  reel.append(strip);
+  reel.style.height = "";
+  landed[reel.id] = text;
+}
+
+// one reel spin: a strip of decoys dragged past the window, overshooting
+// by a few px and settling back so it clicks into the slot.
+function spin(reel, list, final, spinCls, finalCls, rows, dur, delay, onLand){
+  const strip = document.createElement("div");
+  strip.className = "strip";
+  strip.append(mkWord(landed[reel.id] || final, finalCls));
+  for(let i=0;i<rows;i++) strip.append(mkWord(list[(Math.random()*list.length)|0], spinCls));
+  strip.append(mkWord(final, finalCls));
+  strip.append(mkWord(list[(Math.random()*list.length)|0], spinCls)); // filler the overshoot reveals
+  reel.textContent = "";
+  reel.append(strip);
+
+  const rowH = strip.children[0].getBoundingClientRect().height;
+  reel.style.height = rowH + "px";
+
+  const finish = () => {
+    setStatic(reel, final, finalCls);
+    reel.classList.remove("spin");
+    reel.classList.remove("land");
+    void reel.offsetWidth;          // restart the snap keyframes
+    reel.classList.add("land");
+    onLand();
+  };
+
+  if(reduced){ finish(); return; }
+
+  reel.classList.add("spin");
+  const dist = rowH * (rows + 1);
+  strip.animate([
+    { transform:"translateY(0)", easing:"cubic-bezier(.12,.66,.2,1)" },
+    { transform:"translateY(" + -(dist + 9) + "px)", offset:.88, easing:"ease-out" },
+    { transform:"translateY(" + -dist + "px)" }
+  ], { duration:dur, delay:delay, fill:"forwards" }).onfinish = finish;
 }
 
 let spinning = false;
@@ -172,32 +238,33 @@ function roll(){
   if(spinning) return;
   spinning = true;
   el.roll.textContent = "...";
+  el.roll.disabled = true;
+  el.coreMeta.textContent = el.core2Meta.textContent = el.themeMeta.textContent = "";
 
   const hit = Math.random()*100 < chance;
   const a = draw(CORE, "core");
   const b = twoCore ? draw(CORE, "core", a) : null;
   const t = hit ? draw(THEME, "theme") : null;
 
-  const ticks = 9;
-  let n = 0;
-  const spin = setInterval(() => {
-    setWord(el.core, CORE[(Math.random()*CORE.length)|0], "core scramble");
-    if(twoCore) setWord(el.core2, CORE[(Math.random()*CORE.length)|0], "core scramble");
-    if(hit) setWord(el.theme, THEME[(Math.random()*THEME.length)|0], "theme scramble");
-    if(++n >= ticks){
-      clearInterval(spin);
-      land(a, b, t, hit);
-    }
-  }, 38);
+  let pending = twoCore ? 3 : 2;
+  const done = () => { if(--pending === 0) finished(a, b, t, hit); };
+
+  spin(el.coreReel, CORE, a, "core", "core", 13, 700, 0, () => {
+    el.coreMeta.textContent = noRepeat ? bagLeft("core", CORE) + " left in bag" : "";
+    done();
+  });
+  if(twoCore){
+    spin(el.core2Reel, CORE, b, "core", "core", 16, 780, 110, done);
+  }
+  spin(el.themeReel, THEME, hit ? t : "no flavor", "theme", hit ? "theme" : "none", 19, 900, 230, () => {
+    el.themeMeta.textContent = (hit ? "hit at " : "missed at ") + chance + "%";
+    done();
+  });
 }
 
-function land(a, b, t, hit){
-  setWord(el.core, a, "core");
-  if(b) setWord(el.core2, b, "core");
-  setWord(el.theme, hit ? t : "no flavor", hit ? "theme" : "none");
-  el.coreMeta.textContent  = noRepeat ? bagLeft("core", CORE) + " left in bag" : "";
-  el.themeMeta.textContent = hit ? "hit at " + chance + "%" : "missed at " + chance + "%";
+function finished(a, b, t, hit){
   el.roll.textContent = "roll";
+  el.roll.disabled = false;
   spinning = false;
 
   const parts = b ? [a, b] : [a];
@@ -223,16 +290,16 @@ function renderLog(){
   }
 }
 
-function copy(node){
-  const txt = node.textContent;
-  if(!txt || txt === "—" || txt === "no flavor") return;
-  const done = () => {
-    const old = node.textContent;
-    node.textContent = "copied";
-    setTimeout(() => { if(node.textContent === "copied") node.textContent = old; }, 600);
+function copy(reel, meta){
+  const txt = landed[reel.id];
+  if(spinning || !txt || txt === "no flavor") return;
+  const flash = () => {
+    const old = meta.textContent;
+    meta.textContent = "copied";
+    setTimeout(() => { if(meta.textContent === "copied") meta.textContent = old; }, 700);
   };
-  if(navigator.clipboard) navigator.clipboard.writeText(txt).then(done, ()=>{});
-  else done();
+  if(navigator.clipboard) navigator.clipboard.writeText(txt).then(flash, () => {});
+  else flash();
 }
 
 function setChance(v){
@@ -243,15 +310,15 @@ function setChance(v){
 function setTwo(v){
   twoCore = v;
   el.two.setAttribute("aria-pressed", String(v));
-  el.core2.classList.toggle("on", v);
-  if(!v) setWord(el.core2, "—", "core");
+  el.core2Slot.classList.toggle("on", v);
+  if(!v) setStatic(el.core2Reel, "—", "core");
   store.set("two", v);
 }
 function setNoRepeat(v){
   noRepeat = v;
   el.norepeat.setAttribute("aria-pressed", String(v));
   bags.core = []; bags.theme = [];
-  el.coreMeta.textContent = v ? CORE.length + " left in bag" : "";
+  if(!spinning) el.coreMeta.textContent = v ? CORE.length + " left in bag" : "";
   store.set("norepeat", v);
 }
 
@@ -261,9 +328,9 @@ $("plus").onclick  = () => setChance(chance + 5);
 el.two.onclick = () => setTwo(!twoCore);
 el.norepeat.onclick = () => setNoRepeat(!noRepeat);
 $("clear").onclick = e => { e.preventDefault(); log = []; store.set("log", log); renderLog(); };
-el.core.onclick = () => copy(el.core);
-el.core2.onclick = () => copy(el.core2);
-el.theme.onclick = () => copy(el.theme);
+el.coreReel.onclick  = () => copy(el.coreReel, el.coreMeta);
+el.core2Reel.onclick = () => copy(el.core2Reel, el.core2Meta);
+el.themeReel.onclick = () => copy(el.themeReel, el.themeMeta);
 addEventListener("keydown", e => {
   if(e.target.tagName === "BUTTON" || e.target.tagName === "A") return;
   if(e.code === "Space" || e.code === "Enter"){ e.preventDefault(); roll(); }
